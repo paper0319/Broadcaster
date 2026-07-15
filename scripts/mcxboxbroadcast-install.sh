@@ -65,14 +65,14 @@ if [ -d "$jar_file" ]; then
     log "Error: Jar destination became a directory: $jar_file"
     exit 1
 fi
-if ! mv -f -- "$download_tmp" "$jar_file"; then
+if ! mv -fT -- "$download_tmp" "$jar_file"; then
     log 'Error: Jar replacement failed.'
     exit 1
 fi
 if [ -n "$release_url" ]; then
     if ! printf '%s\n' "$release_url" >"$state_tmp" ||
         [ -d "$state_file" ] ||
-        ! mv -f -- "$state_tmp" "$state_file"; then
+        ! mv -fT -- "$state_tmp" "$state_file"; then
         log 'Warning: release state could not be saved.'
     fi
 elif [ -d "$state_file" ]; then

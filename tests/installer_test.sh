@@ -125,6 +125,14 @@ if [ "${MOCK_STATE_MOVE_FAIL:-0}" = 1 ] &&
     [ "$destination" = '.mcxboxbroadcast-release-url' ]; then
     exit 1
 fi
+if [ "${MOCK_CREATE_JAR_DIR_ON_MOVE:-0}" = 1 ] &&
+    [ "$destination" = "$MOCK_JAR_DEST" ]; then
+    mkdir -p -- "$destination"
+fi
+if [ "${MOCK_CREATE_STATE_DIR_ON_MOVE:-0}" = 1 ] &&
+    [ "$destination" = '.mcxboxbroadcast-release-url' ]; then
+    mkdir -p -- "$destination"
+fi
 exec /bin/mv "$@"
 MOCK
 
@@ -146,6 +154,8 @@ run_install() {
         MOCK_SIGNAL_PARENT="${MOCK_SIGNAL_PARENT:-0}" \
         MOCK_REPLACE_FAIL="${MOCK_REPLACE_FAIL:-0}" \
         MOCK_STATE_MOVE_FAIL="${MOCK_STATE_MOVE_FAIL:-0}" \
+        MOCK_CREATE_JAR_DIR_ON_MOVE="${MOCK_CREATE_JAR_DIR_ON_MOVE:-0}" \
+        MOCK_CREATE_STATE_DIR_ON_MOVE="${MOCK_CREATE_STATE_DIR_ON_MOVE:-0}" \
         MOCK_JAR_DEST="$test_jar_file" \
         MOCK_RELEASE_URL="${MOCK_RELEASE_URL:-}" \
         MOCK_SECOND_RELEASE_URL="${MOCK_SECOND_RELEASE_URL:-}" \
@@ -156,7 +166,7 @@ run_install() {
 }
 
 case "$requested_case" in
-    all|success|release-resolution|head-failure|partial-head-failure|head-failure-existing|download-failure|empty-download|signal-cleanup|existing-failures|replacement-failure|jar-directory-collision|jar-directory-race|state-save-failure|state-directory-collision|state-directory-fallback|configured-path|source-policy) ;;
+    all|success|release-resolution|head-failure|partial-head-failure|head-failure-existing|download-failure|empty-download|signal-cleanup|existing-failures|replacement-failure|jar-directory-collision|jar-directory-race|jar-mv-boundary-race|state-save-failure|state-directory-collision|state-directory-fallback|state-mv-boundary-race|configured-path|source-policy) ;;
     *) fail "unknown test case: $requested_case" ;;
 esac
 
@@ -388,6 +398,23 @@ if [ "$requested_case" = all ] || [ "$requested_case" = jar-directory-race ]; th
     assert_not_contains 'Installation completed.' "$case_dir/install.log"
 fi
 
+if [ "$requested_case" = all ] || [ "$requested_case" = jar-mv-boundary-race ]; then
+    make_case jar-mv-boundary-race
+    printf '%s\n' old >"$case_dir/server/.mcxboxbroadcast-release-url"
+    release_url='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar'
+    set +e
+    MOCK_CREATE_JAR_DIR_ON_MOVE=1 MOCK_RELEASE_URL="$release_url" run_install
+    status=$?
+    set -e
+    [ "$status" -ne 0 ] || fail 'a Jar directory created at the mv boundary should fail installation'
+    [ -d "$case_dir/server/MCXboxBroadcastStandalone.jar" ] || fail 'mv-boundary Jar directory is missing'
+    assert_content old "$case_dir/server/.mcxboxbroadcast-release-url"
+    assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
+    assert_absent "$case_dir/server/MCXboxBroadcastStandalone.jar/.MCXboxBroadcastStandalone.jar.download"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
+    assert_not_contains 'Installation completed.' "$case_dir/install.log"
+fi
+
 if [ "$requested_case" = all ] || [ "$requested_case" = state-save-failure ]; then
     make_case state-save-failure
     release_url='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar'
@@ -427,6 +454,23 @@ if [ "$requested_case" = all ] || [ "$requested_case" = state-directory-fallback
     [ "$status" -eq 0 ] || fail 'official fallback should tolerate a state directory collision'
     assert_content valid-new "$case_dir/server/MCXboxBroadcastStandalone.jar"
     [ -d "$case_dir/server/.mcxboxbroadcast-release-url" ] || fail 'state directory was changed'
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
+    assert_contains 'Warning: release state could not be saved.' "$case_dir/install.log"
+    assert_contains 'Installation completed.' "$case_dir/install.log"
+fi
+
+if [ "$requested_case" = all ] || [ "$requested_case" = state-mv-boundary-race ]; then
+    make_case state-mv-boundary-race
+    release_url='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar'
+    set +e
+    MOCK_CREATE_STATE_DIR_ON_MOVE=1 MOCK_RELEASE_URL="$release_url" run_install
+    status=$?
+    set -e
+    [ "$status" -eq 0 ] || fail 'state mv-boundary collision should keep the installed Jar usable'
+    assert_content valid-new "$case_dir/server/MCXboxBroadcastStandalone.jar"
+    [ -d "$case_dir/server/.mcxboxbroadcast-release-url" ] || fail 'mv-boundary state directory is missing'
     assert_absent "$case_dir/server/.mcxboxbroadcast-release-url/.mcxboxbroadcast-release-url.tmp"
     assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
     assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
