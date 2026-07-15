@@ -129,7 +129,12 @@ class EggDefinitionTests(unittest.TestCase):
             },
         ]
         pelican_rules = [
-            ["required", "string", "max:64", "regex:/^[A-Za-z0-9._-]+$/"],
+            [
+                "required",
+                "string",
+                "max:64",
+                r"regex:/^[A-Za-z0-9][A-Za-z0-9._-]*\.jar$/",
+            ],
             ["required", "boolean"],
         ]
         pterodactyl_rules = ["|".join(rules) for rules in pelican_rules]
@@ -151,6 +156,27 @@ class EggDefinitionTests(unittest.TestCase):
             ],
             self.pterodactyl["variables"],
         )
+
+    def test_panel_jar_rule_accepts_only_safe_jar_basenames(self):
+        rule = self.pelican["variables"][0]["rules"][-1]
+        self.assertTrue(rule.startswith("regex:/") and rule.endswith("/"))
+        pattern = rule.removeprefix("regex:/").removesuffix("/")
+
+        for accepted in ("MCXboxBroadcastStandalone.jar", "custom-1.2.jar"):
+            with self.subTest(accepted=accepted):
+                self.assertIsNotNone(re.fullmatch(pattern, accepted))
+
+        for rejected in (
+            "",
+            ".",
+            "config.yml",
+            ".mcxboxbroadcast-release-url",
+            ".hidden.jar",
+            "nested/custom.jar",
+            r"nested\custom.jar",
+        ):
+            with self.subTest(rejected=rejected):
+                self.assertIsNone(re.fullmatch(pattern, rejected))
 
     def test_panel_specific_schema_and_preserved_metadata(self):
         self.assertEqual(
