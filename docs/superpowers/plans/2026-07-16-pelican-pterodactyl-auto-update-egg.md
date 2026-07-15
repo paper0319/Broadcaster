@@ -13,7 +13,7 @@
 - Jar取得元は `https://github.com/MCXboxBroadcast/Broadcaster/releases/latest/download/MCXboxBroadcastStandalone.jar` に固定する。
 - GitHub Releases APIは使用しない。
 - `AUTO_UPDATE`の既定値は`1`で、`0`の場合は更新確認の通信を行わない。
-- ダウンロードは一時ファイルへ行い、`jar tf`成功後だけ本番Jarを置換する。
+- 起動時更新のダウンロードは一時ファイルへ行い、`jar tf`成功後だけ本番Jarを置換する。Alpine installerは一時ファイルの非空検証を行い、初回起動時にJava 21で最終検証する。
 - 更新失敗時は有効な既存Jarを保持して起動する。
 - `config.yml`、認証情報、セッションデータは変更しない。
 - PelicanはJava 21 Pelican公式イメージ、PterodactylはJava 21 Pterodactyl公式イメージを使用する。
