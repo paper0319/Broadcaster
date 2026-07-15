@@ -62,6 +62,10 @@ case " $* " in
         printf '%s\n' "$*" >"$MOCK_ROOT/head-args.log"
         printf '%s\n' "$url" >"$MOCK_ROOT/head-url.log"
         [ "${MOCK_HEAD_FAIL:-0}" = 1 ] && exit 22
+        [ "${MOCK_HEAD_PARTIAL_FAIL:-0}" != 1 ] || {
+            printf 'HTTP/2 302\r\nlocation: %s\r\n\r\n' "$MOCK_RELEASE_URL"
+            exit 22
+        }
         [ "${MOCK_HEAD_NO_LOCATION:-0}" != 1 ] || {
             printf 'HTTP/2 200\r\n\r\n'
             exit 0
@@ -101,6 +105,9 @@ printf '%s\n' "$output" >"$MOCK_ROOT/download-output.log"
     exit 0
 }
 printf valid-new >"$output"
+if [ "${MOCK_CREATE_JAR_DIR:-0}" = 1 ]; then
+    mkdir -p -- "$MOCK_JAR_DEST"
+fi
 MOCK
 
     cat >"$case_dir/bin/mv" <<'MOCK'
@@ -131,9 +138,11 @@ run_install() {
         PATH="$case_dir/bin:$PATH" \
         MOCK_ROOT="$case_dir" \
         MOCK_HEAD_FAIL="${MOCK_HEAD_FAIL:-0}" \
+        MOCK_HEAD_PARTIAL_FAIL="${MOCK_HEAD_PARTIAL_FAIL:-0}" \
         MOCK_HEAD_NO_LOCATION="${MOCK_HEAD_NO_LOCATION:-0}" \
         MOCK_DOWNLOAD_FAIL="${MOCK_DOWNLOAD_FAIL:-0}" \
         MOCK_DOWNLOAD_EMPTY="${MOCK_DOWNLOAD_EMPTY:-0}" \
+        MOCK_CREATE_JAR_DIR="${MOCK_CREATE_JAR_DIR:-0}" \
         MOCK_SIGNAL_PARENT="${MOCK_SIGNAL_PARENT:-0}" \
         MOCK_REPLACE_FAIL="${MOCK_REPLACE_FAIL:-0}" \
         MOCK_STATE_MOVE_FAIL="${MOCK_STATE_MOVE_FAIL:-0}" \
@@ -147,7 +156,7 @@ run_install() {
 }
 
 case "$requested_case" in
-    all|success|release-resolution|head-failure|head-failure-existing|download-failure|empty-download|signal-cleanup|existing-failures|replacement-failure|state-save-failure|configured-path|source-policy) ;;
+    all|success|release-resolution|head-failure|partial-head-failure|head-failure-existing|download-failure|empty-download|signal-cleanup|existing-failures|replacement-failure|jar-directory-collision|jar-directory-race|state-save-failure|state-directory-collision|state-directory-fallback|configured-path|source-policy) ;;
     *) fail "unknown test case: $requested_case" ;;
 esac
 
@@ -191,6 +200,19 @@ if [ "$requested_case" = all ] || [ "$requested_case" = head-failure ]; then
     assert_content valid-new "$case_dir/server/MCXboxBroadcastStandalone.jar"
     assert_content "$latest_url" "$case_dir/download-url.log"
     assert_absent "$case_dir/server/.mcxboxbroadcast-release-url"
+    assert_default_temps_absent
+fi
+
+if [ "$requested_case" = all ] || [ "$requested_case" = partial-head-failure ]; then
+    make_case partial-head-failure
+    printf valid-old >"$case_dir/server/MCXboxBroadcastStandalone.jar"
+    printf '%s\n' old >"$case_dir/server/.mcxboxbroadcast-release-url"
+    untrusted_url='https://github.com/example/releases/download/untrusted/MCXboxBroadcastStandalone.jar'
+    MOCK_HEAD_PARTIAL_FAIL=1 MOCK_RELEASE_URL="$untrusted_url" run_install
+    assert_content valid-new "$case_dir/server/MCXboxBroadcastStandalone.jar"
+    assert_content "$latest_url" "$case_dir/download-url.log"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url"
+    assert_not_contains 'api.github.com' "$repo_root/scripts/mcxboxbroadcast-install.sh"
     assert_default_temps_absent
 fi
 
@@ -328,6 +350,44 @@ if [ "$requested_case" = all ] || [ "$requested_case" = replacement-failure ]; t
     assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
 fi
 
+if [ "$requested_case" = all ] || [ "$requested_case" = jar-directory-collision ]; then
+    make_case jar-directory-collision
+    mkdir -p -- "$case_dir/server/MCXboxBroadcastStandalone.jar"
+    printf '%s\n' old >"$case_dir/server/.mcxboxbroadcast-release-url"
+    set +e
+    MOCK_RELEASE_URL='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar' \
+        run_install
+    status=$?
+    set -e
+    [ "$status" -ne 0 ] || fail 'a Jar directory destination should fail installation'
+    [ -d "$case_dir/server/MCXboxBroadcastStandalone.jar" ] || fail 'Jar directory was changed'
+    assert_content old "$case_dir/server/.mcxboxbroadcast-release-url"
+    assert_absent "$case_dir/head-url.log"
+    assert_absent "$case_dir/download-url.log"
+    assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
+    assert_absent "$case_dir/server/MCXboxBroadcastStandalone.jar/.MCXboxBroadcastStandalone.jar.download"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
+    assert_not_contains 'Installation completed.' "$case_dir/install.log"
+fi
+
+if [ "$requested_case" = all ] || [ "$requested_case" = jar-directory-race ]; then
+    make_case jar-directory-race
+    printf '%s\n' old >"$case_dir/server/.mcxboxbroadcast-release-url"
+    release_url='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar'
+    set +e
+    MOCK_CREATE_JAR_DIR=1 MOCK_RELEASE_URL="$release_url" run_install
+    status=$?
+    set -e
+    [ "$status" -ne 0 ] || fail 'a Jar destination that becomes a directory should fail installation'
+    [ -d "$case_dir/server/MCXboxBroadcastStandalone.jar" ] || fail 'racing Jar directory is missing'
+    assert_content old "$case_dir/server/.mcxboxbroadcast-release-url"
+    assert_content "$release_url" "$case_dir/download-url.log"
+    assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
+    assert_absent "$case_dir/server/MCXboxBroadcastStandalone.jar/.MCXboxBroadcastStandalone.jar.download"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
+    assert_not_contains 'Installation completed.' "$case_dir/install.log"
+fi
+
 if [ "$requested_case" = all ] || [ "$requested_case" = state-save-failure ]; then
     make_case state-save-failure
     release_url='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar'
@@ -341,6 +401,37 @@ if [ "$requested_case" = all ] || [ "$requested_case" = state-save-failure ]; th
     assert_contains 'Warning: release state could not be saved.' "$case_dir/install.log"
     assert_contains 'Installation completed.' "$case_dir/install.log"
     assert_default_temps_absent
+fi
+
+if [ "$requested_case" = all ] || [ "$requested_case" = state-directory-collision ]; then
+    make_case state-directory-collision
+    mkdir -p -- "$case_dir/server/.mcxboxbroadcast-release-url"
+    release_url='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar'
+    MOCK_RELEASE_URL="$release_url" run_install
+    assert_content valid-new "$case_dir/server/MCXboxBroadcastStandalone.jar"
+    [ -d "$case_dir/server/.mcxboxbroadcast-release-url" ] || fail 'state directory was changed'
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
+    assert_contains 'Warning: release state could not be saved.' "$case_dir/install.log"
+    assert_contains 'Installation completed.' "$case_dir/install.log"
+fi
+
+if [ "$requested_case" = all ] || [ "$requested_case" = state-directory-fallback ]; then
+    make_case state-directory-fallback
+    mkdir -p -- "$case_dir/server/.mcxboxbroadcast-release-url"
+    set +e
+    MOCK_HEAD_FAIL=1 run_install
+    status=$?
+    set -e
+    [ "$status" -eq 0 ] || fail 'official fallback should tolerate a state directory collision'
+    assert_content valid-new "$case_dir/server/MCXboxBroadcastStandalone.jar"
+    [ -d "$case_dir/server/.mcxboxbroadcast-release-url" ] || fail 'state directory was changed'
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
+    assert_contains 'Warning: release state could not be saved.' "$case_dir/install.log"
+    assert_contains 'Installation completed.' "$case_dir/install.log"
 fi
 
 if [ "$requested_case" = all ] || [ "$requested_case" = configured-path ]; then
