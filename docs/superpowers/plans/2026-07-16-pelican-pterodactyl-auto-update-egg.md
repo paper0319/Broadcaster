@@ -646,7 +646,7 @@ Expected: 5 tests PASS.
 
 - [ ] **Step 5: JSON差分を確認してコミットする**
 
-Run: `git diff --check`  
+Run: `git diff --check`
 Expected: no output.
 
 ~~~powershell
@@ -723,7 +723,7 @@ Run:
 docker run --rm -v "${PWD}:/work" -w /work ghcr.io/pelican-eggs/yolks:java_21 bash tests/updater_test.sh
 ~~~
 
-Expected: PASS with `updater tests passed`.  
+Expected: PASS with `updater tests passed`.
 If the image cannot be pulled because the registry is unavailable, record the exact pull error; Pterodactyl runtime success remains mandatory.
 
 - [ ] **Step 5: READMEとスモークテストをコミットする**
