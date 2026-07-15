@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PELICAN_PATH = ROOT / "egg-m-c-xbox-broadcast.json"
 PTERODACTYL_PATH = ROOT / "egg-m-c-xbox-broadcast-pterodactyl.json"
+ICON_PATH = ROOT / "assets/mcxboxbroadcast-icon.data-uri"
 UPDATER = (ROOT / "scripts/mcxboxbroadcast-updater.sh").read_bytes().decode("utf-8")
 INSTALLER = (ROOT / "scripts/mcxboxbroadcast-install.sh").read_bytes().decode("utf-8")
 DESCRIPTION = (
@@ -23,6 +24,22 @@ PELICAN_UPDATE_URL = (
 PELICAN_IMAGE_SHA256 = (
     "c78ad4e241282f3fdd65af663b8186c9b1cafd007aac20d519b9c093b8927f23"
 )
+
+
+def load_icon():
+    raw = ICON_PATH.read_bytes()
+    if not raw.endswith(b"\n") or b"\r" in raw:
+        raise ValueError("Pelican icon asset must be a single LF-terminated line")
+    payload = raw[:-1]
+    if b"\n" in payload:
+        raise ValueError("Pelican icon asset must be a single LF-terminated line")
+    icon = payload.decode("ascii")
+    if hashlib.sha256(payload).hexdigest() != PELICAN_IMAGE_SHA256:
+        raise ValueError("Pelican icon asset does not match the preserved PLCN_v3 image")
+    return icon
+
+
+ICON = load_icon()
 
 
 def common_config():
@@ -75,15 +92,6 @@ def pterodactyl_variables():
 
 
 def build_pelican():
-    source = json.loads(PELICAN_PATH.read_text(encoding="utf-8"))
-    image = source.get("image")
-    image_hash = (
-        hashlib.sha256(image.encode("utf-8")).hexdigest()
-        if isinstance(image, str)
-        else None
-    )
-    if image_hash != PELICAN_IMAGE_SHA256:
-        raise ValueError("Pelican image metadata does not match the preserved PLCN_v3 image")
     return {
         "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL",
         "meta": {"version": "PLCN_v3", "update_url": PELICAN_UPDATE_URL},
@@ -92,7 +100,7 @@ def build_pelican():
         "author": "panel@rtm516.co.uk",
         "uuid": "deab1199-f8e5-4bd5-9573-d2f8c04c50a0",
         "description": DESCRIPTION,
-        "image": image,
+        "image": ICON,
         "tags": ["minecraft"],
         "features": [],
         "docker_images": {"Java 21": "ghcr.io/pelican-eggs/yolks:java_21"},

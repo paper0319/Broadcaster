@@ -1,1 +1,6 @@
+.gitattributes text eol=lf
 *.sh text eol=lf
+assets/*.data-uri text eol=lf
+egg-m-c-xbox-broadcast*.json text eol=lf
+scripts/*.py text eol=lf
+tests/*.py text eol=lf

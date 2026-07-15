@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PELICAN = ROOT / "egg-m-c-xbox-broadcast.json"
 PTERODACTYL = ROOT / "egg-m-c-xbox-broadcast-pterodactyl.json"
+ICON = ROOT / "assets/mcxboxbroadcast-icon.data-uri"
 UPDATER = (ROOT / "scripts/mcxboxbroadcast-updater.sh").read_bytes().decode("utf-8")
 INSTALLER = (ROOT / "scripts/mcxboxbroadcast-install.sh").read_bytes().decode("utf-8")
 LATEST = (
@@ -29,10 +30,22 @@ DESCRIPTION = (
 )
 
 
-def copy_generator_fixture(destination):
+def copy_generator_fixture(destination, include_outputs=True):
+    shutil.copy2(ROOT / ".gitattributes", destination / ".gitattributes")
     shutil.copytree(ROOT / "scripts", destination / "scripts")
-    shutil.copy2(PELICAN, destination / PELICAN.name)
-    shutil.copy2(PTERODACTYL, destination / PTERODACTYL.name)
+    shutil.copytree(ROOT / "assets", destination / "assets")
+    if include_outputs:
+        shutil.copy2(PELICAN, destination / PELICAN.name)
+        shutil.copy2(PTERODACTYL, destination / PTERODACTYL.name)
+
+
+def embedded_runtime_urls(egg):
+    startup = egg.get(
+        "startup",
+        egg.get("startup_commands", {}).get("Default", ""),
+    )
+    runtime_text = startup + "\n" + egg["scripts"]["installation"]["script"]
+    return set(re.findall(r"https?://[^\s\"']+", runtime_text))
 
 
 class EggDefinitionTests(unittest.TestCase):
@@ -51,6 +64,49 @@ class EggDefinitionTests(unittest.TestCase):
         self.assertEqual(
             {"Java 21": "ghcr.io/pterodactyl/yolks:java_21"},
             self.pterodactyl["docker_images"],
+        )
+
+    def test_generated_text_is_pinned_to_lf(self):
+        paths = [
+            PELICAN.name,
+            PTERODACTYL.name,
+            "scripts/sync-eggs.py",
+            "tests/test_eggs.py",
+        ]
+        result = subprocess.run(
+            ["git", "check-attr", "eol", "--", *paths],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            [f"{path}: eol: lf" for path in paths],
+            result.stdout.splitlines(),
+        )
+
+    def test_preserved_icon_comes_from_lf_asset(self):
+        raw = ICON.read_bytes()
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertNotIn(b"\r\n", raw)
+        payload = raw[:-1]
+        self.assertNotIn(b"\n", payload)
+        self.assertEqual(
+            "c78ad4e241282f3fdd65af663b8186c9b1cafd007aac20d519b9c093b8927f23",
+            hashlib.sha256(payload).hexdigest(),
+        )
+        self.assertEqual(payload.decode("ascii"), self.pelican["image"])
+
+        result = subprocess.run(
+            ["git", "check-attr", "eol", "--", ICON.relative_to(ROOT).as_posix()],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(
+            "assets/mcxboxbroadcast-icon.data-uri: eol: lf",
+            result.stdout.strip(),
         )
 
     def test_variables_use_panel_specific_rule_shapes(self):
@@ -182,15 +238,21 @@ class EggDefinitionTests(unittest.TestCase):
             encoded = json.dumps(egg)
             self.assertIn(LATEST, encoded)
             self.assertNotIn("api.github.com", encoded)
-            startup = egg.get(
-                "startup",
-                egg.get("startup_commands", {}).get("Default", ""),
-            )
-            runtime_text = startup + "\n" + egg["scripts"]["installation"]["script"]
-            self.assertEqual(
-                {LATEST},
-                set(re.findall(r"https://github\.com/[^\s\"']+", runtime_text)),
-            )
+            self.assertEqual({LATEST}, embedded_runtime_urls(egg))
+
+    def test_runtime_url_scanner_includes_non_github_http_literals(self):
+        rogue_urls = [
+            "https://example.invalid/rogue.jar",
+            "http://127.0.0.1/rogue.jar",
+        ]
+        for rogue_url in rogue_urls:
+            with self.subTest(rogue_url=rogue_url):
+                egg = json.loads(json.dumps(self.pelican))
+                egg["scripts"]["installation"]["script"] += f"\n{rogue_url}\n"
+                self.assertEqual(
+                    {LATEST, rogue_url},
+                    embedded_runtime_urls(egg),
+                )
 
     def test_check_mode_detects_drift_without_writing(self):
         mutations = [
@@ -230,6 +292,63 @@ class EggDefinitionTests(unittest.TestCase):
                 self.assertEqual(1, result.returncode, result.stdout + result.stderr)
                 self.assertIn(f"out of date: {filename}", result.stderr)
                 self.assertEqual(drifted_bytes, target.read_bytes())
+
+    def test_check_mode_reports_missing_outputs_without_writing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_root = Path(temp)
+            copy_generator_fixture(temp_root, include_outputs=False)
+            missing = [
+                temp_root / PELICAN.name,
+                temp_root / PTERODACTYL.name,
+            ]
+
+            result = subprocess.run(
+                [sys.executable, str(temp_root / "scripts/sync-eggs.py"), "--check"],
+                cwd=temp_root,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(
+                [f"out of date: {path.name}" for path in missing],
+                result.stderr.splitlines(),
+            )
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertTrue(all(not path.exists() for path in missing))
+
+    def test_sync_recreates_missing_and_corrupt_outputs(self):
+        scenarios = {
+            "missing": None,
+            "corrupt": b"not valid JSON\r\n",
+        }
+        expected = {
+            PELICAN.name: PELICAN.read_bytes(),
+            PTERODACTYL.name: PTERODACTYL.read_bytes(),
+        }
+        for scenario, corrupt_bytes in scenarios.items():
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                temp_root = Path(temp)
+                copy_generator_fixture(
+                    temp_root,
+                    include_outputs=corrupt_bytes is not None,
+                )
+                if corrupt_bytes is not None:
+                    for filename in expected:
+                        (temp_root / filename).write_bytes(corrupt_bytes)
+
+                result = subprocess.run(
+                    [sys.executable, str(temp_root / "scripts/sync-eggs.py")],
+                    cwd=temp_root,
+                    text=True,
+                    capture_output=True,
+                )
+
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(
+                    expected,
+                    {filename: (temp_root / filename).read_bytes() for filename in expected},
+                )
 
     def test_sync_is_idempotent_when_outputs_are_current(self):
         with tempfile.TemporaryDirectory() as temp:
