@@ -21,8 +21,36 @@ You use this project at your own risk, the contributors are not responsible for 
  - Web manager for larger networks
  - Uploading of a custom image for the account (see below for more info)
 
-## Pterodactyl Panel
-There is an egg for easy instance creation supplied for [Pterodactyl Panel](https://pterodactyl.io/), this being `egg-m-c-xbox-broadcast.json`
+## Pelican and Pterodactyl Panels
+
+This fork provides separate Egg files because Pelican and Pterodactyl use
+different export formats. In your Panel's Egg import screen, import the file
+that matches your Panel:
+
+- `egg-m-c-xbox-broadcast.json` — Pelican (`PLCN_v3`)
+- `egg-m-c-xbox-broadcast-pterodactyl.json` — Pterodactyl (`PTDL_v2`)
+
+Both Eggs install only the official `MCXboxBroadcastStandalone.jar` from
+`MCXboxBroadcast/Broadcaster`. By default (`AUTO_UPDATE=1`), every server
+startup checks that repository's latest official GitHub release. Set
+`AUTO_UPDATE` to `0` in the Panel startup variables to disable the network
+update check.
+
+An update downloads to a temporary file and must pass Java 21's `jar tf`
+validation before it replaces the configured `SERVER_JARFILE`. If the release
+check, download, validation, or replacement fails, startup falls back to the
+current Jar only if it is still valid. Jar installation and updates leave
+`config.yml`, authentication files, and session data unchanged.
+
+If no valid Jar remains, startup stops rather than running an unverified
+download. Restore GitHub access and restart with automatic updates enabled, or
+use the Panel's reinstall action to fetch a fresh official Jar.
+
+Runtime Jar checks do not update an Egg definition already imported into your
+Panel. The Pelican file's `meta.update_url` points to this fork's Pelican
+definition for Pelican's Egg update mechanism. The Pterodactyl file has no
+update URL, so import a newer Pterodactyl JSON manually when its Egg definition
+changes.
 
 ## Docker
 There is a docker image available for the standalone version of the tool, this can be found at `ghcr.io/mcxboxbroadcast/standalone:latest`
