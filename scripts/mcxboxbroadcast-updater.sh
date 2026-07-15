@@ -6,11 +6,15 @@ latest_url='https://github.com/MCXboxBroadcast/Broadcaster/releases/latest/downl
 state_file='.mcxboxbroadcast-release-url'
 state_tmp="${state_file}.tmp"
 jar_file="${SERVER_JARFILE:-MCXboxBroadcastStandalone.jar}"
-download_tmp=".${jar_file}.download"
+jar_dir="$(dirname -- "$jar_file")"
+jar_name="$(basename -- "$jar_file")"
+download_tmp="${jar_dir}/.${jar_name}.download"
 
 log() { printf '%s %s\n' "$prefix" "$*"; }
 cleanup() { rm -f -- "$download_tmp" "$state_tmp"; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 jar_is_valid() {
     [[ -f "$1" ]] && jar tf "$1" >/dev/null 2>&1
@@ -43,12 +47,15 @@ if auto_update_enabled; then
                 --connect-timeout 10 --max-time 180 \
                 --output "$download_tmp" "$release_url"; then
                 if jar_is_valid "$download_tmp"; then
-                    mv -f -- "$download_tmp" "$jar_file"
-                    if printf '%s\n' "$release_url" >"$state_tmp" &&
-                        mv -f -- "$state_tmp" "$state_file"; then
-                        log 'Update completed.'
+                    if mv -f -- "$download_tmp" "$jar_file"; then
+                        if printf '%s\n' "$release_url" >"$state_tmp" &&
+                            mv -f -- "$state_tmp" "$state_file"; then
+                            log 'Update completed.'
+                        else
+                            log 'Warning: Jar updated, but release state could not be saved.'
+                        fi
                     else
-                        log 'Warning: Jar updated, but release state could not be saved.'
+                        log 'Warning: Jar replacement failed; keeping the existing Jar.'
                     fi
                 else
                     log 'Warning: downloaded file is not a valid Jar; keeping the existing Jar.'
@@ -69,5 +76,6 @@ if ! jar_is_valid "$jar_file"; then
     exit 1
 fi
 
+cleanup
 trap - EXIT INT TERM
 exec java -Xms128M -Xmx{{SERVER_MEMORY}}M -jar "$jar_file"
