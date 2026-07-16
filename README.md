@@ -30,6 +30,10 @@ that matches your Panel:
 - `egg-m-c-xbox-broadcast.json` — Pelican (`PLCN_v3`)
 - `egg-m-c-xbox-broadcast-pterodactyl.json` — Pterodactyl (`PTDL_v2`)
 
+GitHub Releases also provide the same definitions under the shorter asset names
+`panel-pelican.json` and `panel-pterodactyl.json`, together with
+`MCXboxBroadcastStandalone.jar`.
+
 Both Eggs install only the official `MCXboxBroadcastStandalone.jar` from
 `MCXboxBroadcast/Broadcaster`. By default (`AUTO_UPDATE=1`), every server
 startup checks that repository's latest official GitHub release. Set
