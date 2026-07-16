@@ -11,6 +11,10 @@ on:
       - '.github/**'
       - '!.github/workflows/release.yml'
 
+permissions:
+  contents: write
+  packages: write
+
 env:
   DOCKER_OWNER: ${{ github.repository_owner }}
   DOCKER_CONTAINER: standalone
@@ -44,7 +48,7 @@ jobs:
       if: success()
       env:
         PREVIOUS_BUILD: ${{ steps.getPreviousBuild.outputs.result }}
-      run: echo result=$((++PREVIOUS_BUILD)) >> $GITHUB_OUTPUT
+      run: echo "result=$((${PREVIOUS_BUILD:-0} + 1))" >> "$GITHUB_OUTPUT"
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v5
@@ -72,19 +76,26 @@ jobs:
 
     - name: Bump version and push tag
       id: tag_version
-      uses: mathieudutour/github-tag-action@v6.2
       if: ${{ success() && github.ref_name == 'master' }}
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        tag_prefix: ''
-        custom_tag: ${{ steps.getCurrentBuild.outputs.result }}
+      env:
+        RELEASE_TAG: ${{ steps.getCurrentBuild.outputs.result }}
+      run: |
+        git tag "$RELEASE_TAG"
+        git push origin "$RELEASE_TAG"
 
     - name: Generate release diff
       if: ${{ success() && github.ref_name == 'master' }}
       env:
         BEGIN_COMMIT: ${{ steps.getPreviousBuild.outputs.result }}
         END_COMMIT: ${{ steps.getCurrentBuild.outputs.result }}
-      run: git fetch --tags --force && git log --pretty=format:"* %s (%h)" ${BEGIN_COMMIT}..${END_COMMIT} > release_notes.md
+      run: |
+        git fetch --tags --force
+        if [[ -n "$BEGIN_COMMIT" ]]; then
+          RELEASE_RANGE="${BEGIN_COMMIT}..${END_COMMIT}"
+        else
+          RELEASE_RANGE="$END_COMMIT"
+        fi
+        git log --pretty=format:"* %s (%h)" "$RELEASE_RANGE" > release_notes.md
 
     - name: Publish to Modrinth
       if: ${{ success() && github.repository == 'MCXboxBroadcast/Broadcaster' &&  github.ref_name == 'master' }}
