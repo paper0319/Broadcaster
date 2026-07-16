@@ -33,25 +33,58 @@ download_tmp=''
 state_tmp=''
 temp_candidate=''
 active_child=''
+child_starting=0
+pending_signal=0
+lock_fd_open=0
 
 cleanup() {
     [[ -z "$head_tmp" ]] || rm -f -- "$head_tmp"
     [[ -z "$download_tmp" ]] || rm -f -- "$download_tmp"
     [[ -z "$state_tmp" ]] || rm -f -- "$state_tmp"
+    if [[ "$lock_fd_open" == 1 ]]; then
+        exec 9>&-
+        lock_fd_open=0
+    fi
 }
 
-run_curl() {
-    curl "$@" &
+run_tracked() {
+    child_starting=1
+    "$@" &
     active_child=$!
+    child_starting=0
+    if [[ "$pending_signal" != 0 ]]; then
+        signal_status="$pending_signal"
+        pending_signal=0
+        kill -TERM "$active_child" 2>/dev/null || :
+        wait "$active_child" 2>/dev/null || :
+        active_child=''
+        exit "$signal_status"
+    fi
     wait "$active_child"
-    curl_status=$?
+    child_status=$?
     active_child=''
-    return "$curl_status"
+    return "$child_status"
+}
+
+acquire_update_lock() {
+    if ! exec 9<.; then
+        return 1
+    fi
+    lock_fd_open=1
+    if ! run_tracked flock -x 9; then
+        exec 9>&-
+        lock_fd_open=0
+        return 1
+    fi
 }
 
 handle_signal() {
     signal_status="$1"
     trap - INT TERM
+    if [[ "$child_starting" == 1 ]]; then
+        pending_signal="$signal_status"
+        return
+    fi
     if [[ -n "$active_child" ]]; then
         kill -TERM "$active_child" 2>/dev/null || :
         wait "$active_child" 2>/dev/null || :
@@ -76,72 +109,77 @@ auto_update_enabled() {
 }
 
 if auto_update_enabled; then
-    log 'Checking the latest official release...'
-    release_url=''
-    temp_candidate=''
-    if temp_candidate="$(mktemp './.mcxboxbroadcast-head.XXXXXX')"; then
-        head_tmp="$temp_candidate"
-        if run_curl -fsSI --connect-timeout 10 --max-time 30 \
-            --output "$head_tmp" "$latest_url" 2>/dev/null; then
-            release_url="$(
-                awk 'tolower($1) == "location:" { gsub("\r", "", $2); print $2; exit }' \
-                    "$head_tmp"
-            )"
-        fi
-        rm -f -- "$head_tmp"
-        head_tmp=''
-    fi
-
-    if [[ -z "$release_url" ]]; then
-        log 'Warning: release check failed; keeping the existing Jar.'
+    if ! acquire_update_lock; then
+        log 'Warning: update lock could not be acquired; keeping the existing Jar.'
     else
-        installed_url=''
-        [[ -f "$state_file" ]] && IFS= read -r installed_url <"$state_file"
+        log 'Checking the latest official release...'
+        release_url=''
+        temp_candidate=''
+        if temp_candidate="$(mktemp './.mcxboxbroadcast-head.XXXXXX')"; then
+            head_tmp="$temp_candidate"
+            if run_tracked curl -fsSI --retry 3 --retry-delay 2 \
+                --connect-timeout 10 --max-time 30 \
+                --output "$head_tmp" "$latest_url" 2>/dev/null; then
+                release_url="$(
+                    awk 'tolower($1) == "location:" { gsub("\r", "", $2); print $2; exit }' \
+                        "$head_tmp"
+                )"
+            fi
+            rm -f -- "$head_tmp"
+            head_tmp=''
+        fi
 
-        if [[ "$installed_url" != "$release_url" ]] || ! jar_is_valid "$jar_file"; then
-            temp_candidate=''
-            if ! temp_candidate="$(mktemp "./${jar_dir}/.${jar_name}.download.XXXXXX")"; then
-                log 'Warning: download staging could not be created; keeping the existing Jar.'
-            else
-                download_tmp="$temp_candidate"
+        if [[ -z "$release_url" ]]; then
+            log 'Warning: release check failed; keeping the existing Jar.'
+        else
+            installed_url=''
+            [[ -f "$state_file" ]] && IFS= read -r installed_url <"$state_file"
+
+            if [[ "$installed_url" != "$release_url" ]] || ! jar_is_valid "$jar_file"; then
                 temp_candidate=''
-                if [[ ! -d "$state_file" ]] &&
-                    ! temp_candidate="$(mktemp './.mcxboxbroadcast-release-url.tmp.XXXXXX')"; then
-                    log 'Warning: release-state staging could not be created; keeping the existing Jar.'
+                if ! temp_candidate="$(mktemp "./${jar_dir}/.${jar_name}.download.XXXXXX")"; then
+                    log 'Warning: download staging could not be created; keeping the existing Jar.'
                 else
-                    [[ -d "$state_file" ]] || state_tmp="$temp_candidate"
-                    log "Downloading release: $release_url"
-                    if run_curl --fail --silent --show-error --location \
-                        --retry 3 --retry-delay 2 \
-                        --connect-timeout 10 --max-time 180 \
-                        --output "$download_tmp" "$release_url"; then
-                        if jar_is_valid "$download_tmp"; then
-                            if [[ -d "$jar_file" ]]; then
-                                log 'Warning: Jar destination became a directory; keeping the existing Jar.'
-                            elif mv -fT -- "$download_tmp" "$jar_file"; then
-                                download_tmp=''
-                                if [[ -d "$state_file" ]]; then
-                                    log 'Warning: Jar updated, but release state could not be saved.'
-                                elif printf '%s\n' "$release_url" >"$state_tmp" &&
-                                    mv -fT -- "$state_tmp" "$state_file"; then
-                                    state_tmp=''
-                                    log 'Update completed.'
+                    download_tmp="$temp_candidate"
+                    temp_candidate=''
+                    if [[ ! -d "$state_file" ]] &&
+                        ! temp_candidate="$(mktemp './.mcxboxbroadcast-release-url.tmp.XXXXXX')"; then
+                        log 'Warning: release-state staging could not be created; keeping the existing Jar.'
+                    else
+                        [[ -d "$state_file" ]] || state_tmp="$temp_candidate"
+                        log "Downloading release: $release_url"
+                        if run_tracked curl --fail --silent --show-error --location \
+                            --retry 3 --retry-delay 2 \
+                            --connect-timeout 10 --max-time 180 \
+                            --output "$download_tmp" "$release_url"; then
+                            if jar_is_valid "$download_tmp"; then
+                                if [[ -d "$jar_file" ]]; then
+                                    log 'Warning: Jar destination became a directory; keeping the existing Jar.'
+                                elif mv -fT -- "$download_tmp" "$jar_file"; then
+                                    download_tmp=''
+                                    if [[ -d "$state_file" ]]; then
+                                        log 'Warning: Jar updated, but release state could not be saved.'
+                                    elif printf '%s\n' "$release_url" >"$state_tmp" &&
+                                        mv -fT -- "$state_tmp" "$state_file"; then
+                                        state_tmp=''
+                                        log 'Update completed.'
+                                    else
+                                        log 'Warning: Jar updated, but release state could not be saved.'
+                                    fi
                                 else
-                                    log 'Warning: Jar updated, but release state could not be saved.'
+                                    log 'Warning: Jar replacement failed; keeping the existing Jar.'
                                 fi
                             else
-                                log 'Warning: Jar replacement failed; keeping the existing Jar.'
+                                log 'Warning: downloaded file is not a valid Jar; keeping the existing Jar.'
                             fi
                         else
-                            log 'Warning: downloaded file is not a valid Jar; keeping the existing Jar.'
+                            log 'Warning: download failed; keeping the existing Jar.'
                         fi
-                    else
-                        log 'Warning: download failed; keeping the existing Jar.'
                     fi
                 fi
+            else
+                log 'Already up to date.'
             fi
-        else
-            log 'Already up to date.'
         fi
     fi
 else

@@ -40,7 +40,9 @@ An update downloads to a temporary file and must pass Java 21's `jar tf`
 validation before it replaces the configured `SERVER_JARFILE`. If the release
 check, download, validation, or replacement fails, startup falls back to the
 current Jar only if it is still valid. Jar installation and updates leave
-`config.yml`, authentication files, and session data unchanged.
+`config.yml`, authentication files, and session data unchanged. Concurrent
+install or startup update attempts are serialized so the Jar and recorded
+release URL cannot become mismatched.
 
 If no valid Jar remains, startup stops rather than running an unverified
 download. Restore GitHub access and restart with automatic updates enabled, or

@@ -71,6 +71,19 @@ make_case() {
 #!/bin/ash
 set -eu
 
+if [ -n "${MOCK_SIGNAL_ON_START:-}" ]; then
+    printf '%s\n' "$$" >"$MOCK_ROOT/curl-child.pid"
+    terminate_starting_curl() {
+        printf 'terminated\n' >"$MOCK_ROOT/curl-terminated.log"
+        exit 99
+    }
+    trap terminate_starting_curl TERM INT
+    kill -"$MOCK_SIGNAL_ON_START" "$PPID"
+    : >"$MOCK_ROOT/curl-ready.log"
+    sleep 2
+    exit 98
+fi
+
 url=''
 for argument in "$@"; do
     url="$argument"
@@ -91,6 +104,15 @@ case " $arguments " in
         printf '%s\n' "$arguments" >"$MOCK_ROOT/head-args.log"
         printf '%s\n' "$url" >"$MOCK_ROOT/head-url.log"
         printf '%s\n' "$output" >>"$MOCK_ROOT/head-output.log"
+        if [ "${MOCK_CONCURRENT_RELEASES:-0}" = 1 ]; then
+            : >"$MOCK_ROOT/${MOCK_RUN_ID}.head-ready"
+            attempts=0
+            while [ "$attempts" -lt 40 ]; do
+                [ -e "$MOCK_ROOT/A.head-ready" ] && [ -e "$MOCK_ROOT/B.head-ready" ] && break
+                sleep 0.05
+                attempts=$((attempts + 1))
+            done
+        fi
         if [ "${MOCK_BLOCK_PHASE:-}" = head ]; then
             printf '%s\n' "$$" >"$MOCK_ROOT/curl-child.pid"
             : >"$MOCK_ROOT/curl-ready.log"
@@ -140,7 +162,7 @@ fi
     : >"$output"
     exit 0
 }
-printf valid-new >"$output"
+printf '%s' "${MOCK_DOWNLOAD_CONTENT:-valid-new}" >"$output"
 if [ "${MOCK_CREATE_JAR_DIR:-0}" = 1 ]; then
     mkdir -p -- "$MOCK_JAR_DEST"
 fi
@@ -179,6 +201,30 @@ if [ "${MOCK_CREATE_STATE_DIR_ON_MOVE:-0}" = 1 ] &&
     [ "$destination" = '.mcxboxbroadcast-release-url' ]; then
     mkdir -p -- "$destination"
 fi
+if [ "${MOCK_CONCURRENT_RELEASES:-0}" = 1 ]; then
+    wait_for_marker() {
+        marker="$1"
+        attempts=0
+        while [ "$attempts" -lt 40 ]; do
+            [ -e "$marker" ] && return 0
+            sleep 0.05
+            attempts=$((attempts + 1))
+        done
+        return 0
+    }
+    if [ "$destination" = "$MOCK_JAR_DEST" ]; then
+        [ "$MOCK_RUN_ID" != A ] || wait_for_marker "$MOCK_ROOT/B.jar-moved"
+        /bin/mv "$@"
+        : >"$MOCK_ROOT/${MOCK_RUN_ID}.jar-moved"
+        exit 0
+    fi
+    if [ "$destination" = '.mcxboxbroadcast-release-url' ]; then
+        [ "$MOCK_RUN_ID" != B ] || wait_for_marker "$MOCK_ROOT/A.state-moved"
+        /bin/mv "$@"
+        : >"$MOCK_ROOT/${MOCK_RUN_ID}.state-moved"
+        exit 0
+    fi
+fi
 exec /bin/mv "$@"
 MOCK
 
@@ -198,7 +244,14 @@ esac
 exec /bin/mktemp "$@"
 MOCK
 
-    chmod +x "$case_dir/bin/curl" "$case_dir/bin/mv" "$case_dir/bin/mktemp"
+    cat >"$case_dir/bin/flock" <<'MOCK'
+#!/bin/ash
+set -eu
+[ "${MOCK_FLOCK_FAIL:-0}" != 1 ] || exit 1
+exec /usr/bin/flock "$@"
+MOCK
+
+    chmod +x "$case_dir/bin/curl" "$case_dir/bin/mv" "$case_dir/bin/mktemp" "$case_dir/bin/flock"
 }
 
 invoke_install() {
@@ -212,7 +265,11 @@ invoke_install() {
         MOCK_HEAD_NO_LOCATION="${MOCK_HEAD_NO_LOCATION:-0}" \
         MOCK_DOWNLOAD_FAIL="${MOCK_DOWNLOAD_FAIL:-0}" \
         MOCK_DOWNLOAD_EMPTY="${MOCK_DOWNLOAD_EMPTY:-0}" \
+        MOCK_DOWNLOAD_CONTENT="${MOCK_DOWNLOAD_CONTENT:-valid-new}" \
+        MOCK_CONCURRENT_RELEASES="${MOCK_CONCURRENT_RELEASES:-0}" \
+        MOCK_RUN_ID="${MOCK_RUN_ID:-single}" \
         MOCK_BLOCK_PHASE="${MOCK_BLOCK_PHASE:-}" \
+        MOCK_SIGNAL_ON_START="${MOCK_SIGNAL_ON_START:-}" \
         MOCK_CREATE_JAR_DIR="${MOCK_CREATE_JAR_DIR:-0}" \
         MOCK_CREATE_STATE_DIR="${MOCK_CREATE_STATE_DIR:-0}" \
         MOCK_REPLACE_FAIL="${MOCK_REPLACE_FAIL:-0}" \
@@ -220,6 +277,7 @@ invoke_install() {
         MOCK_CREATE_JAR_DIR_ON_MOVE="${MOCK_CREATE_JAR_DIR_ON_MOVE:-0}" \
         MOCK_CREATE_STATE_DIR_ON_MOVE="${MOCK_CREATE_STATE_DIR_ON_MOVE:-0}" \
         MOCK_MKTEMP_FAIL_PATTERN="${MOCK_MKTEMP_FAIL_PATTERN:-}" \
+        MOCK_FLOCK_FAIL="${MOCK_FLOCK_FAIL:-0}" \
         MOCK_JAR_DEST="$test_jar_file" \
         MOCK_RELEASE_URL="${MOCK_RELEASE_URL:-}" \
         MOCK_SECOND_RELEASE_URL="${MOCK_SECOND_RELEASE_URL:-}" \
@@ -240,9 +298,102 @@ run_install() {
 }
 
 case "$requested_case" in
-    all|unsafe-jar-names|legacy-temp-symlinks|unique-temp-names|mktemp-failure|success|release-resolution|head-failure|partial-head-failure|head-failure-existing|download-failure|empty-download|signal-cleanup|existing-failures|replacement-failure|jar-directory-collision|jar-directory-race|jar-mv-boundary-race|state-save-failure|state-directory-collision|state-directory-race|state-directory-fallback|state-mv-boundary-race|configured-path|option-like-path|source-policy) ;;
+    all|concurrent-release-pair|lock-failure|signal-at-child-start|unsafe-jar-names|legacy-temp-symlinks|unique-temp-names|mktemp-failure|success|release-resolution|head-failure|partial-head-failure|head-failure-existing|download-failure|empty-download|signal-cleanup|existing-failures|replacement-failure|jar-directory-collision|jar-directory-race|jar-mv-boundary-race|state-save-failure|state-directory-collision|state-directory-race|state-directory-fallback|state-mv-boundary-race|configured-path|option-like-path|source-policy) ;;
     *) fail "unknown test case: $requested_case" ;;
 esac
+
+if [ "$requested_case" = all ] || [ "$requested_case" = concurrent-release-pair ]; then
+    make_case concurrent-release-pair
+    printf valid-base >"$case_dir/server/MCXboxBroadcastStandalone.jar"
+    printf '%s\n' base >"$case_dir/server/.mcxboxbroadcast-release-url"
+    old_url='https://github.com/example/releases/download/old/MCXboxBroadcastStandalone.jar'
+    new_url='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar'
+
+    MOCK_CONCURRENT_RELEASES=1 MOCK_RUN_ID=A \
+        MOCK_RELEASE_URL="$old_url" MOCK_DOWNLOAD_CONTENT=valid-old-release \
+        start_install
+    install_a_pid=$INSTALL_PID
+    MOCK_CONCURRENT_RELEASES=1 MOCK_RUN_ID=B \
+        MOCK_RELEASE_URL="$new_url" MOCK_DOWNLOAD_CONTENT=valid-new-release \
+        start_install
+    install_b_pid=$INSTALL_PID
+    wait "$install_a_pid"
+    wait "$install_b_pid"
+
+    installed_url="$(cat "$case_dir/server/.mcxboxbroadcast-release-url")"
+    case "$installed_url" in
+        "$old_url") assert_content valid-old-release "$case_dir/server/MCXboxBroadcastStandalone.jar" ;;
+        "$new_url") assert_content valid-new-release "$case_dir/server/MCXboxBroadcastStandalone.jar" ;;
+        *) fail "unexpected concurrent release state: $installed_url" ;;
+    esac
+    (
+        cd "$case_dir/server"
+        exec 8<.
+        flock -n 8
+    ) || fail 'installer transaction lock was not released'
+    assert_absent "$case_dir/server/.mcxboxbroadcast-update.lock"
+    assert_default_temps_absent
+fi
+
+if [ "$requested_case" = all ] || [ "$requested_case" = lock-failure ]; then
+    make_case lock-failure
+    printf valid-old >"$case_dir/server/MCXboxBroadcastStandalone.jar"
+    printf '%s\n' old >"$case_dir/server/.mcxboxbroadcast-release-url"
+    set +e
+    MOCK_FLOCK_FAIL=1 \
+        MOCK_RELEASE_URL='https://github.com/example/releases/download/new/MCXboxBroadcastStandalone.jar' \
+        run_install
+    status=$?
+    set -e
+    [ "$status" -ne 0 ] || fail 'lock acquisition failure should fail installation'
+    assert_content valid-old "$case_dir/server/MCXboxBroadcastStandalone.jar"
+    assert_content old "$case_dir/server/.mcxboxbroadcast-release-url"
+    assert_absent "$case_dir/curl.log"
+    assert_contains 'Error: update lock could not be acquired.' "$case_dir/install.log"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-update.lock"
+    assert_not_contains 'Installation completed.' "$case_dir/install.log"
+    assert_default_temps_absent
+fi
+
+if [ "$requested_case" = all ] || [ "$requested_case" = signal-at-child-start ]; then
+    signal_specs='TERM 143
+INT 130'
+    old_ifs="$IFS"
+    IFS='
+'
+    for signal_spec in $signal_specs; do
+        IFS="$old_ifs"
+        set -- $signal_spec
+        signal_name="$1"
+        expected_status="$2"
+        make_case "signal-at-child-start-$signal_name"
+        printf valid-old >"$case_dir/server/MCXboxBroadcastStandalone.jar"
+        printf '%s\n' old >"$case_dir/server/.mcxboxbroadcast-release-url"
+        set +e
+        MOCK_SIGNAL_ON_START="$signal_name" invoke_install
+        status=$?
+        set -e
+        wait_for_file "$case_dir/curl-child.pid"
+        child_pid="$(cat "$case_dir/curl-child.pid")"
+        child_still_running=0
+        if kill -0 "$child_pid" 2>/dev/null; then
+            child_still_running=1
+            kill -KILL "$child_pid" 2>/dev/null || :
+        fi
+
+        [ "$status" = "$expected_status" ] ||
+            fail "$signal_name at child start exited $status instead of $expected_status"
+        [ "$child_still_running" = 0 ] || fail "$signal_name at child start left curl running"
+        assert_file "$case_dir/curl-terminated.log"
+        assert_content valid-old "$case_dir/server/MCXboxBroadcastStandalone.jar"
+        assert_content old "$case_dir/server/.mcxboxbroadcast-release-url"
+        assert_not_contains 'Installation completed.' "$case_dir/install.log"
+        assert_default_temps_absent
+        IFS='
+'
+    done
+    IFS="$old_ifs"
+fi
 
 if [ "$requested_case" = all ] || [ "$requested_case" = unsafe-jar-names ]; then
     unsafe_names='<empty>

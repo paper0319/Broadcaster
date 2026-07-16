@@ -38,25 +38,58 @@ download_tmp=''
 state_tmp=''
 temp_candidate=''
 active_child=''
+child_starting=0
+pending_signal=0
+lock_fd_open=0
 
 cleanup() {
     [ -z "$head_tmp" ] || rm -f -- "$head_tmp"
     [ -z "$download_tmp" ] || rm -f -- "$download_tmp"
     [ -z "$state_tmp" ] || rm -f -- "$state_tmp"
+    if [ "$lock_fd_open" = 1 ]; then
+        exec 9>&-
+        lock_fd_open=0
+    fi
 }
 
-run_curl() {
-    curl "$@" &
+run_tracked() {
+    child_starting=1
+    "$@" &
     active_child=$!
+    child_starting=0
+    if [ "$pending_signal" != 0 ]; then
+        signal_status="$pending_signal"
+        pending_signal=0
+        kill -TERM "$active_child" 2>/dev/null || :
+        wait "$active_child" 2>/dev/null || :
+        active_child=''
+        exit "$signal_status"
+    fi
     wait "$active_child"
-    curl_status=$?
+    child_status=$?
     active_child=''
-    return "$curl_status"
+    return "$child_status"
+}
+
+acquire_update_lock() {
+    if ! exec 9<.; then
+        return 1
+    fi
+    lock_fd_open=1
+    if ! run_tracked flock -x 9; then
+        exec 9>&-
+        lock_fd_open=0
+        return 1
+    fi
 }
 
 handle_signal() {
     signal_status="$1"
     trap - INT TERM
+    if [ "$child_starting" = 1 ]; then
+        pending_signal="$signal_status"
+        return
+    fi
     if [ -n "$active_child" ]; then
         kill -TERM "$active_child" 2>/dev/null || :
         wait "$active_child" 2>/dev/null || :
@@ -78,6 +111,11 @@ if [ -d "$jar_file" ]; then
     exit 1
 fi
 
+if ! acquire_update_lock; then
+    log 'Error: update lock could not be acquired.'
+    exit 1
+fi
+
 temp_candidate=''
 if ! temp_candidate="$(mktemp './.mcxboxbroadcast-head.XXXXXX')"; then
     log 'Error: HEAD staging could not be created.'
@@ -86,7 +124,7 @@ fi
 head_tmp="$temp_candidate"
 
 release_url=''
-if run_curl -fsSI --retry 3 --retry-delay 2 \
+if run_tracked curl -fsSI --retry 3 --retry-delay 2 \
     --connect-timeout 10 --max-time 30 \
     --output "$head_tmp" "$latest_url" 2>/dev/null; then
     release_url="$(
@@ -115,7 +153,7 @@ if [ -n "$release_url" ] && [ ! -d "$state_file" ]; then
 fi
 
 log "Downloading $download_url"
-if ! run_curl --fail --silent --show-error --location \
+if ! run_tracked curl --fail --silent --show-error --location \
     --retry 3 --retry-delay 2 \
     --connect-timeout 10 --max-time 180 \
     --output "$download_tmp" "$download_url"; then
