@@ -34,11 +34,12 @@ GitHub Releases also provide the same definitions under the shorter asset names
 `panel-pelican.json` and `panel-pterodactyl.json`, together with
 `MCXboxBroadcastStandalone.jar`.
 
-Both Eggs install only the official `MCXboxBroadcastStandalone.jar` from
-`MCXboxBroadcast/Broadcaster`. By default (`AUTO_UPDATE=1`), every server
-startup checks that repository's latest official GitHub release. Set
-`AUTO_UPDATE` to `0` in the Panel startup variables to disable the network
-update check.
+Both Eggs install the official `MCXboxBroadcastStandalone.jar` from
+`MCXboxBroadcast/Broadcaster` and provision the bundled
+`mcxboxbroadcast-updater.sh` automatically. No manual startup command or
+script upload is required. By default (`AUTO_UPDATE=1`), every server startup
+checks that repository's latest official GitHub release. Set `AUTO_UPDATE` to
+`0` in the Panel startup variables to disable the network update check.
 
 An update downloads to a temporary file and must pass Java 21's `jar tf`
 validation before it replaces the configured `SERVER_JARFILE`. If the release
@@ -46,7 +47,9 @@ check, download, validation, or replacement fails, startup falls back to the
 current Jar only if it is still valid. Jar installation and updates leave
 `config.yml`, authentication files, and session data unchanged. Concurrent
 install or startup update attempts are serialized so the Jar and recorded
-release URL cannot become mismatched.
+release URL cannot become mismatched. The recorded SHA-256 is also checked, so
+replacing the Jar with an older or modified valid Jar causes the latest release
+to be restored on the next startup.
 
 If no valid Jar remains, startup stops rather than running an unverified
 download. Restore GitHub access and restart with automatic updates enabled, or

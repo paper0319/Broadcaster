@@ -31,18 +31,29 @@ wait_for_file() {
 }
 assert_java_args() {
     local expected
-    printf -v expected '%s\n' '-Xms128M' '-Xmx{{SERVER_MEMORY}}M' '-jar' "$1"
+    printf -v expected '%s\n' '-Xms128M' '-Xmx1028M' '-jar' "$1"
     expected="${expected%$'\n'}"
     assert_content "$expected" "$CASE_DIR/java.log"
+}
+assert_java_args_with_heap() {
+    local heap="$1" jar_file="$2" expected
+    printf -v expected '%s\n' '-Xms128M' "-Xmx${heap}M" '-jar' "$jar_file"
+    expected="${expected%$'\n'}"
+    assert_content "$expected" "$CASE_DIR/java.log"
+}
+sha256_of_text() {
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
 }
 assert_default_temps_absent() {
     assert_absent "$CASE_DIR/.MCXboxBroadcastStandalone.jar.download"
     assert_absent "$CASE_DIR/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$CASE_DIR/.mcxboxbroadcast-release-sha256.tmp"
     leftover="$(
         find "$CASE_DIR" -type f \
             \( -name '.mcxboxbroadcast-head.*' \
             -o -name '.*.download.*' \
-            -o -name '.mcxboxbroadcast-release-url.tmp.*' \) \
+            -o -name '.mcxboxbroadcast-release-url.tmp.*' \
+            -o -name '.mcxboxbroadcast-release-sha256.tmp.*' \) \
             -print -quit
     )"
     [[ -z "$leftover" ]] || fail "transient file was not cleaned: $leftover"
@@ -242,9 +253,36 @@ run_updater() {
 }
 
 case "$requested_case" in
-    all|concurrent-release-pair|lock-failure|signal-at-child-start|unsafe-jar-names|legacy-temp-symlinks|unique-temp-names|mktemp-failure|jar-directory-collision|jar-directory-race|jar-mv-boundary-race|state-directory-collision|state-directory-race|state-mv-boundary-race|partial-head-failure|replacement-failure|signal-during-update|failure-cleanup|configured-path|option-like-path|missing-state|missing-jar) ;;
+    all|manual-jar-replacement|runtime-memory|concurrent-release-pair|lock-failure|signal-at-child-start|unsafe-jar-names|legacy-temp-symlinks|unique-temp-names|mktemp-failure|jar-directory-collision|jar-directory-race|jar-mv-boundary-race|state-directory-collision|state-directory-race|state-mv-boundary-race|partial-head-failure|replacement-failure|signal-during-update|failure-cleanup|configured-path|option-like-path|missing-state|missing-jar) ;;
     *) fail "unknown test case: $requested_case" ;;
 esac
+
+if [[ "$requested_case" == all || "$requested_case" == manual-jar-replacement ]]; then
+    make_case manual-jar-replacement
+    release_url='https://github.com/example/releases/download/current/MCXboxBroadcastStandalone.jar'
+    printf valid-old >"$CASE_DIR/MCXboxBroadcastStandalone.jar"
+    printf '%s\n' "$release_url" >"$CASE_DIR/.mcxboxbroadcast-release-url"
+    printf '%s\n' "$(sha256_of_text valid-new)" \
+        >"$CASE_DIR/.mcxboxbroadcast-release-sha256"
+    MOCK_RELEASE_URL="$release_url" run_updater
+    assert_content valid-new "$CASE_DIR/MCXboxBroadcastStandalone.jar"
+    assert_content "$(sha256_of_text valid-new)" \
+        "$CASE_DIR/.mcxboxbroadcast-release-sha256"
+    assert_contains 'Downloading release:' "$CASE_DIR/updater.log"
+    assert_java_args 'MCXboxBroadcastStandalone.jar'
+fi
+
+if [[ "$requested_case" == all || "$requested_case" == runtime-memory ]]; then
+    make_case configured-runtime-memory
+    printf valid-old >"$CASE_DIR/MCXboxBroadcastStandalone.jar"
+    AUTO_UPDATE=0 SERVER_MEMORY=2048 run_updater
+    assert_java_args_with_heap 2048 'MCXboxBroadcastStandalone.jar'
+
+    make_case unlimited-runtime-memory
+    printf valid-old >"$CASE_DIR/MCXboxBroadcastStandalone.jar"
+    AUTO_UPDATE=0 SERVER_MEMORY=0 run_updater
+    assert_java_args_with_heap 1028 'MCXboxBroadcastStandalone.jar'
+fi
 
 if [[ "$requested_case" == all || "$requested_case" == concurrent-release-pair ]]; then
     make_case concurrent-release-pair
@@ -725,6 +763,7 @@ assert_default_temps_absent
 make_case unchanged
 printf valid-old >"$CASE_DIR/MCXboxBroadcastStandalone.jar"
 printf '%s\n' 'https://github.com/example/releases/download/current/MCXboxBroadcastStandalone.jar' >"$CASE_DIR/.mcxboxbroadcast-release-url"
+printf '%s\n' "$(sha256_of_text valid-old)" >"$CASE_DIR/.mcxboxbroadcast-release-sha256"
 MOCK_RELEASE_URL='https://github.com/example/releases/download/current/MCXboxBroadcastStandalone.jar' run_updater
 [[ "$(wc -l <"$CASE_DIR/curl.log")" -eq 1 ]] || fail "unchanged release downloaded"
 assert_contains '-fsSI --retry 3 --retry-delay 2' "$CASE_DIR/curl.log"

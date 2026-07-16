@@ -28,6 +28,7 @@ DESCRIPTION = (
     "Show a server on the friends tab in Minecraft, with safe automatic "
     "updates from the official MCXboxBroadcast releases."
 )
+STARTUP = "bash ./mcxboxbroadcast-updater.sh"
 
 
 def copy_generator_fixture(destination, include_outputs=True):
@@ -421,14 +422,33 @@ class EggDefinitionTests(unittest.TestCase):
             self.assertEqual(rendered, raw, path.name)
             self.assertEqual(parsed, json.loads(json.dumps(parsed, ensure_ascii=False)))
 
-    def test_canonical_scripts_and_installer_images(self):
-        self.assertEqual(UPDATER, self.pelican["startup_commands"]["Default"])
-        self.assertEqual(UPDATER, self.pterodactyl["startup"])
+    def test_installer_provisions_updater_and_startup_invokes_it(self):
+        self.assertEqual(STARTUP, self.pelican["startup_commands"]["Default"])
+        self.assertEqual(STARTUP, self.pterodactyl["startup"])
+        self.assertNotIn("\n", self.pelican["startup_commands"]["Default"])
+        self.assertNotIn("\n", self.pterodactyl["startup"])
 
+        for egg in (self.pelican, self.pterodactyl):
+            installation_script = egg["scripts"]["installation"]["script"]
+            self.assertIn("mcxboxbroadcast-updater.sh", installation_script)
+            self.assertIn(UPDATER, installation_script)
+            self.assertLess(
+                installation_script.index('cd -- "$server_dir"'),
+                installation_script.index(
+                    "mktemp './.mcxboxbroadcast-updater.sh.tmp.XXXXXX'"
+                ),
+            )
+            self.assertIn(
+                "printf '%s\\n' '[MCXboxBroadcast Installer] Error: "
+                "updater staging could not be created.'",
+                installation_script,
+            )
+
+    def test_canonical_installer_images(self):
         pelican_install = self.pelican["scripts"]["installation"]
         pterodactyl_install = self.pterodactyl["scripts"]["installation"]
-        self.assertEqual(INSTALLER, pelican_install["script"])
-        self.assertEqual(INSTALLER, pterodactyl_install["script"])
+        self.assertIn(INSTALLER, pelican_install["script"])
+        self.assertIn(INSTALLER, pterodactyl_install["script"])
         self.assertEqual(
             "ghcr.io/pelican-eggs/installers:alpine",
             pelican_install["container"],

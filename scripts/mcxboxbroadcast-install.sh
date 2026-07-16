@@ -6,6 +6,7 @@ latest_url='https://github.com/MCXboxBroadcast/Broadcaster/releases/latest/downl
 server_dir="${SERVER_DIR:-/mnt/server}"
 jar_file="${SERVER_JARFILE-MCXboxBroadcastStandalone.jar}"
 state_file='.mcxboxbroadcast-release-url'
+hash_file='.mcxboxbroadcast-release-sha256'
 
 log() {
     printf '%s %s\n' "$prefix" "$*"
@@ -36,6 +37,7 @@ jar_name="$(basename -- "$jar_file")" || exit 1
 head_tmp=''
 download_tmp=''
 state_tmp=''
+hash_tmp=''
 temp_candidate=''
 active_child=''
 child_starting=0
@@ -46,6 +48,7 @@ cleanup() {
     [ -z "$head_tmp" ] || rm -f -- "$head_tmp"
     [ -z "$download_tmp" ] || rm -f -- "$download_tmp"
     [ -z "$state_tmp" ] || rm -f -- "$state_tmp"
+    [ -z "$hash_tmp" ] || rm -f -- "$hash_tmp"
     if [ "$lock_fd_open" = 1 ]; then
         exec 9>&-
         lock_fd_open=0
@@ -151,6 +154,14 @@ if [ -n "$release_url" ] && [ ! -d "$state_file" ]; then
     fi
     state_tmp="$temp_candidate"
 fi
+if [ -n "$release_url" ] && [ ! -d "$hash_file" ]; then
+    temp_candidate=''
+    if ! temp_candidate="$(mktemp './.mcxboxbroadcast-release-sha256.tmp.XXXXXX')"; then
+        log 'Error: release-hash staging could not be created.'
+        exit 1
+    fi
+    hash_tmp="$temp_candidate"
+fi
 
 log "Downloading $download_url"
 if ! run_tracked curl --fail --silent --show-error --location \
@@ -164,6 +175,7 @@ fi
     log 'Error: downloaded Jar is empty.'
     exit 1
 }
+download_hash="$(sha256sum -- "$download_tmp" | awk '{print $1}')"
 if [ -d "$jar_file" ]; then
     log "Error: Jar destination became a directory: $jar_file"
     exit 1
@@ -175,6 +187,13 @@ fi
 download_tmp=''
 
 if [ -n "$release_url" ]; then
+    if [ -d "$hash_file" ] ||
+        ! printf '%s\n' "$download_hash" >"$hash_tmp" ||
+        ! mv -fT -- "$hash_tmp" "$hash_file"; then
+        log 'Warning: release hash could not be saved.'
+    else
+        hash_tmp=''
+    fi
     if [ -d "$state_file" ] ||
         ! printf '%s\n' "$release_url" >"$state_tmp" ||
         ! mv -fT -- "$state_tmp" "$state_file"; then
@@ -182,9 +201,9 @@ if [ -n "$release_url" ]; then
     else
         state_tmp=''
     fi
-elif [ -d "$state_file" ]; then
+elif [ -d "$state_file" ] || [ -d "$hash_file" ]; then
     log 'Warning: release state could not be saved.'
-elif ! rm -f -- "$state_file"; then
+elif ! rm -f -- "$state_file" "$hash_file"; then
     log 'Error: stale release state could not be removed.'
     exit 1
 fi

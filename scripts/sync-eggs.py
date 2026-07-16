@@ -17,6 +17,7 @@ DESCRIPTION = (
     "Show a server on the friends tab in Minecraft, with safe automatic "
     "updates from the official MCXboxBroadcast releases."
 )
+STARTUP = "bash ./mcxboxbroadcast-updater.sh"
 PELICAN_UPDATE_URL = (
     "https://raw.githubusercontent.com/paper0319/Broadcaster/"
     "refs/heads/master/egg-m-c-xbox-broadcast.json"
@@ -40,6 +41,50 @@ def load_icon():
 
 
 ICON = load_icon()
+
+
+def installation_script():
+    delimiter = "MCXBOXBROADCAST_UPDATER_EOF"
+    if delimiter in UPDATER:
+        raise ValueError("Updater contains the installation heredoc delimiter")
+    provision_updater = f"""#!/bin/ash
+set -u
+
+server_dir="${{SERVER_DIR:-/mnt/server}}"
+updater_file='mcxboxbroadcast-updater.sh'
+updater_tmp=''
+
+cleanup_updater() {{
+    [ -z "$updater_tmp" ] || rm -f -- "$updater_tmp"
+}}
+
+trap cleanup_updater EXIT INT TERM
+
+mkdir -p -- "$server_dir" || exit 1
+cd -- "$server_dir" || exit 1
+
+if ! updater_tmp="$(mktemp './.mcxboxbroadcast-updater.sh.tmp.XXXXXX')"; then
+    printf '%s\\n' '[MCXboxBroadcast Installer] Error: updater staging could not be created.'
+    exit 1
+fi
+if ! cat >"$updater_tmp" <<'{delimiter}'
+{UPDATER}{delimiter}
+then
+    printf '%s\\n' '[MCXboxBroadcast Installer] Error: updater staging could not be written.'
+    exit 1
+fi
+if ! chmod 755 "$updater_tmp" || ! mv -fT -- "$updater_tmp" "$updater_file"; then
+    printf '%s\\n' '[MCXboxBroadcast Installer] Error: updater could not be installed.'
+    exit 1
+fi
+updater_tmp=''
+trap - EXIT INT TERM
+
+"""
+    return provision_updater + INSTALLER
+
+
+INSTALLATION_SCRIPT = installation_script()
 
 
 def common_config():
@@ -105,11 +150,11 @@ def build_pelican():
         "features": [],
         "docker_images": {"Java 21": "ghcr.io/pelican-eggs/yolks:java_21"},
         "file_denylist": [],
-        "startup_commands": {"Default": UPDATER},
+        "startup_commands": {"Default": STARTUP},
         "config": common_config(),
         "scripts": {
             "installation": {
-                "script": INSTALLER,
+                "script": INSTALLATION_SCRIPT,
                 "container": "ghcr.io/pelican-eggs/installers:alpine",
                 "entrypoint": "ash",
             },
@@ -134,11 +179,11 @@ def build_pterodactyl():
             "Java 21": "ghcr.io/pterodactyl/yolks:java_21",
         },
         "file_denylist": [],
-        "startup": UPDATER,
+        "startup": STARTUP,
         "config": common_config(),
         "scripts": {
             "installation": {
-                "script": INSTALLER,
+                "script": INSTALLATION_SCRIPT,
                 "container": "ghcr.io/pterodactyl/installers:alpine",
                 "entrypoint": "ash",
             },

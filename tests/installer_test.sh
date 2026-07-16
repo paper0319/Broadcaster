@@ -37,6 +37,9 @@ assert_contains() {
     file="$2"
     grep -Fq -- "$expected" "$file" || fail "$file missing content: $expected"
 }
+sha256_of_text() {
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+}
 
 wait_for_file() {
     file="$1"
@@ -52,11 +55,13 @@ wait_for_file() {
 assert_default_temps_absent() {
     assert_absent "$case_dir/server/.MCXboxBroadcastStandalone.jar.download"
     assert_absent "$case_dir/server/.mcxboxbroadcast-release-url.tmp"
+    assert_absent "$case_dir/server/.mcxboxbroadcast-release-sha256.tmp"
     leftover="$(
         find "$case_dir/server" -type f \
             \( -name '.mcxboxbroadcast-head.*' \
             -o -name '.*.download.*' \
-            -o -name '.mcxboxbroadcast-release-url.tmp.*' \) \
+            -o -name '.mcxboxbroadcast-release-url.tmp.*' \
+            -o -name '.mcxboxbroadcast-release-sha256.tmp.*' \) \
             -print -quit
     )"
     [ -z "$leftover" ] || fail "transient file was not cleaned: $leftover"
@@ -511,6 +516,8 @@ if [ "$requested_case" = all ] || [ "$requested_case" = legacy-temp-symlinks ]; 
     MOCK_RELEASE_URL="$release_url" run_install
     assert_content valid-new "$case_dir/server/MCXboxBroadcastStandalone.jar"
     assert_content "$release_url" "$case_dir/server/.mcxboxbroadcast-release-url"
+    assert_content "$(sha256_of_text valid-new)" \
+        "$case_dir/server/.mcxboxbroadcast-release-sha256"
     assert_content config-data "$case_dir/server/config.yml"
     assert_content auth-data "$case_dir/server/auth.json"
     assert_content session-data "$case_dir/server/session.dat"
